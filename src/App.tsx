@@ -215,11 +215,11 @@ function App() {
           'Current Weight (kg)': p.current_weight,
           'Baseline Weight (kg)': p.baseline_weight,
           'Goal Weight (kg)': p.goal_weight,
-          'Weight Lost (kg)': p.total_lost,
-          'Progress to Goal (%)': p.percentage_to_goal,
-          'Last Weigh-in': p.last_recorded ? new Date(p.last_recorded).toLocaleDateString() : 'Never',
-          'Days Since Start': Math.floor((Date.now() - new Date(p.created_at).getTime()) / (1000 * 60 * 60 * 24)),
-          'Profile Created': new Date(p.created_at).toLocaleDateString()
+          'Weight Lost (kg)': p.weight_lost,
+          'Progress to Goal (%)': p.percentage_lost,
+          'Last Weigh-in': p.last_weigh_in ? new Date(p.last_weigh_in).toLocaleDateString() : 'Never',
+          'Profile ID': p.id,
+          'Date Joined': new Date().toLocaleDateString()
         })));
         XLSX.utils.book_append_sheet(workbook, standingsWS, 'Current Standings');
       }
@@ -388,7 +388,18 @@ function App() {
   }, [profiles, addNotification]);
 
   const shareStats = () => {
-    const top3 = profiles.slice(0, 3).filter(p => p.percentage_lost);
+    // 🐛 FIX: Handle cases with no data or minimal progress
+    if (profiles.length === 0) {
+      const text = `🏆 *WEIGH-IN WEDNESDAY RESULTS*\n\n📊 No participants yet. Join the challenge! 💪`;
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+      return;
+    }
+
+    // Get top performers (prioritize those with progress, but include all if needed)
+    const profilesWithProgress = profiles.filter(p => p.percentage_lost && p.percentage_lost > 0);
+    const profilesWithWeighIns = profiles.filter(p => p.current_weight);
+    const top3 = (profilesWithProgress.length >= 3 ? profilesWithProgress : profilesWithWeighIns).slice(0, 3);
+
     const biggestLoser = [...profiles]
       .filter(p => p.weight_lost && p.weight_lost > 0)
       .sort((a, b) => (b.weight_lost || 0) - (a.weight_lost || 0))[0];
@@ -400,10 +411,21 @@ function App() {
     }
 
     text += `📊 *Top 3 Progress Leaders:*\n`;
-    top3.forEach((p, i) => {
-      const emoji = i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉';
-      text += `${emoji} ${p.name}: ${p.percentage_lost}% (${Math.abs(p.weight_lost || 0).toFixed(1)}kg lost)\n`;
-    });
+    
+    if (top3.length === 0) {
+      text += `No weigh-ins recorded yet. Get started! 🎯\n`;
+    } else {
+      top3.forEach((p, i) => {
+        const emoji = i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉';
+        const progress = p.percentage_lost && p.percentage_lost > 0 
+          ? `${p.percentage_lost}% progress` 
+          : 'Getting started';
+        const weightInfo = p.weight_lost && p.weight_lost > 0 
+          ? ` (${Math.abs(p.weight_lost).toFixed(1)}kg lost)` 
+          : p.current_weight ? ` (Current: ${p.current_weight}kg)` : '';
+        text += `${emoji} ${p.name}: ${progress}${weightInfo}\n`;
+      });
+    }
 
     text += `\n💪 Keep crushing it, team!`;
 
@@ -456,6 +478,345 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const checkForDuplicate = useCallback(async (profileId: string, date: string): Promise<boolean> => {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    try {
+      const { data } = await supabase
+        .from('weights')
+        .select('id')
+        .eq('profile_id', profileId)
+        .gte('recorded_at', startOfDay.toISOString())
+        .lte('recorded_at', endOfDay.toISOString());
+
+      return (data?.length || 0) > 0;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const checkAchievements = useCallback((profile: LeaderboardEntry, history: Weight[]) => {
+    achievements.forEach(achievement => {
+      if (achievement.criteria(profile, history)) {
+        const alreadyNotified = notifications.some(n => n.message.includes(achievement.title));
+        if (!alreadyNotified) {
+          addNotification('achievement', `🎉 ${profile.name} unlocked: ${achievement.title}!`, 8000);
+        }
+      }
+    });
+  }, [notifications, addNotification]);
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (adminPassword === ADMIN_PASSWORD) {
+      setIsAdmin(true);
+      setShowLogin(false);
+      setAdminPassword('');
+      addNotification('success', 'Admin access granted!');
+    } else {
+      addNotification('error', 'Incorrect password');
+    }
+  };
+
+  const handleAddWeight = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setFormErrors({});
+    
+    try {
+      if (!newWeight.profile_id) {
+        setFormErrors({ profile_id: 'Please select a participant' });
+        return;
+      }
+      
+      const weightValidation = validateWeight(newWeight.weight);
+      if (!weightValidation.isValid) {
+        setFormErrors(weightValidation.errors);
+        return;
+      }
+      
+      const dateToUse = newWeight.date || new Date().toISOString();
+      if (newWeight.date) {
+        const dateValidation = validateDate(newWeight.date);
+        if (!dateValidation.isValid) {
+          setFormErrors(dateValidation.errors);
+          return;
+        }
+      }
+      
+      const isDuplicate = await checkForDuplicate(newWeight.profile_id, dateToUse);
+      if (isDuplicate) {
+        setFormErrors({ weight: 'A weight entry already exists for this date.' });
+        return;
+      }
+
+      const { error } = await supabase
+        .from('weights')
+        .insert([{
+          profile_id: newWeight.profile_id,
+          current_weight: parseWeight(newWeight.weight),
+          recorded_at: dateToUse
+        }]);
+
+      if (error) throw error;
+      
+      const profile = profiles.find(p => p.id === newWeight.profile_id);
+      addNotification('success', `Weight logged for ${profile?.name}!`);
+      
+      if (profile) {
+        const history = await fetchProfileHistory(profile.id);
+        checkAchievements(profile, history);
+      }
+      
+      setShowAddWeight(false);
+      setNewWeight({ profile_id: '', weight: '', date: '' });
+      fetchData();
+    } catch (error: any) {
+      addNotification('error', `Failed to add weight: ${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleAddProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setFormErrors({});
+    
+    try {
+      const nameValidation = validateName(newProfile.name, profiles.map(p => p.name));
+      const baselineValidation = validateWeight(newProfile.baseline);
+      const goalValidation = validateWeight(newProfile.goal);
+      
+      const errors = {
+        ...nameValidation.errors,
+        baseline: baselineValidation.errors.weight,
+        goal: goalValidation.errors.weight
+      };
+      
+      if (baselineValidation.isValid && goalValidation.isValid) {
+        const baselineNum = parseWeight(newProfile.baseline);
+        const goalNum = parseWeight(newProfile.goal);
+        if (goalNum >= baselineNum) {
+          errors.goal = 'Goal weight should be less than starting weight';
+        }
+      }
+      
+      if (Object.values(errors).some(Boolean)) {
+        setFormErrors(errors);
+        return;
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .insert([{
+          name: newProfile.name.trim(),
+          baseline_weight: parseWeight(newProfile.baseline),
+          goal_weight: parseWeight(newProfile.goal)
+        }]);
+
+      if (error) throw error;
+      
+      addNotification('success', `Profile created for ${newProfile.name}!`);
+      setShowAddProfile(false);
+      setNewProfile({ name: '', baseline: '', goal: '' });
+      fetchData();
+    } catch (error: any) {
+      addNotification('error', `Failed to create profile: ${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleEditProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    
+    setSubmitting(true);
+    setFormErrors({});
+    
+    try {
+      const nameValidation = validateName(editProfile.name, profiles.map(p => p.name), selectedProfile.name);
+      const baselineValidation = validateWeight(editProfile.baseline);
+      const goalValidation = validateWeight(editProfile.goal);
+      
+      const errors = {
+        ...nameValidation.errors,
+        baseline: baselineValidation.errors.weight,
+        goal: goalValidation.errors.weight
+      };
+      
+      if (baselineValidation.isValid && goalValidation.isValid) {
+        const baselineNum = parseWeight(editProfile.baseline);
+        const goalNum = parseWeight(editProfile.goal);
+        if (goalNum >= baselineNum) {
+          errors.goal = 'Goal weight should be less than starting weight';
+        }
+      }
+      
+      if (Object.values(errors).some(Boolean)) {
+        setFormErrors(errors);
+        return;
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          name: editProfile.name.trim(),
+          baseline_weight: parseWeight(editProfile.baseline),
+          goal_weight: parseWeight(editProfile.goal)
+        })
+        .eq('id', selectedProfile.id);
+
+      if (error) throw error;
+      
+      addNotification('success', `Profile updated for ${editProfile.name}!`);
+      setShowEditProfile(false);
+      setShowProfileDetail(false);
+      fetchData();
+    } catch (error: any) {
+      addNotification('error', `Failed to update profile: ${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleEditWeight = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWeightId) return;
+    
+    setSubmitting(true);
+    setFormErrors({});
+    
+    try {
+      const weightValidation = validateWeight(editWeight.weight);
+      if (!weightValidation.isValid) {
+        setFormErrors(weightValidation.errors);
+        return;
+      }
+      
+      if (editWeight.date) {
+        const dateValidation = validateDate(editWeight.date);
+        if (!dateValidation.isValid) {
+          setFormErrors(dateValidation.errors);
+          return;
+        }
+      }
+
+      const { error } = await supabase
+        .from('weights')
+        .update({
+          current_weight: parseWeight(editWeight.weight),
+          recorded_at: editWeight.date || new Date().toISOString()
+        })
+        .eq('id', selectedWeightId);
+
+      if (error) throw error;
+      
+      addNotification('success', 'Weight entry updated!');
+      setShowEditWeight(false);
+      fetchData();
+      if (selectedProfile) {
+        await fetchProfileHistory(selectedProfile.id);
+      }
+    } catch (error: any) {
+      addNotification('error', `Failed to update weight: ${error.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    
+    if (deleteTarget.type === 'profile') {
+      handleDeleteProfile();
+    } else {
+      handleDeleteWeight();
+    }
+  };
+
+  const handleDeleteProfile = async () => {
+    if (!deleteTarget) return;
+    
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', deleteTarget.id);
+
+      if (error) throw error;
+      
+      addNotification('success', `${deleteTarget.name} removed from leaderboard`);
+      setShowConfirmDialog(false);
+      setShowProfileDetail(false);
+      setDeleteTarget(null);
+      fetchData();
+    } catch (error: any) {
+      addNotification('error', `Failed to delete profile: ${error.message}`);
+    }
+  };
+
+  const handleDeleteWeight = async () => {
+    if (!deleteTarget) return;
+    
+    try {
+      const { error } = await supabase
+        .from('weights')
+        .delete()
+        .eq('id', deleteTarget.id);
+
+      if (error) throw error;
+      
+      addNotification('success', 'Weight entry deleted');
+      setShowConfirmDialog(false);
+      setDeleteTarget(null);
+      fetchData();
+      if (selectedProfile) {
+        await fetchProfileHistory(selectedProfile.id);
+      }
+    } catch (error: any) {
+      addNotification('error', `Failed to delete weight: ${error.message}`);
+    }
+  };
+
+  const openEditProfile = (profile: LeaderboardEntry) => {
+    setSelectedProfile(profile);
+    setEditProfile({
+      name: profile.name,
+      baseline: profile.baseline_weight.toString(),
+      goal: profile.goal_weight.toString()
+    });
+    setShowEditProfile(true);
+  };
+
+  const openEditWeight = (weight: Weight) => {
+    setSelectedWeightId(weight.id);
+    setEditWeight({
+      weight: weight.current_weight.toString(),
+      date: weight.recorded_at.split('T')[0]
+    });
+    setShowEditWeight(true);
+  };
+
+  const openDeleteProfile = (profile: LeaderboardEntry) => {
+    setDeleteTarget({ type: 'profile', id: profile.id, name: profile.name });
+    setShowConfirmDialog(true);
+  };
+
+  const openDeleteWeight = (weight: Weight) => {
+    const profile = profiles.find(p => p.id === weight.profile_id);
+    setDeleteTarget({ 
+      type: 'weight', 
+      id: weight.id, 
+      name: `${profile?.name || 'Unknown'}'s weight entry` 
+    });
+    setShowConfirmDialog(true);
   };
 
   useEffect(() => {
@@ -546,7 +907,11 @@ function App() {
             >
               <Download size={20} />
             </button>
-            <button className="p-3 bg-purple-600 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" title="Weekly Summary">
+            <button 
+              onClick={() => setShowWeeklySummary(true)}
+              className="p-3 bg-purple-600 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" 
+              title="Weekly Summary"
+            >
               <Calendar size={20} />
             </button>
           </>
@@ -602,8 +967,450 @@ function App() {
         onAdminToggle={() => isAdmin ? setIsAdmin(false) : setShowLogin(true)}
       />
 
-      {/* TODO: Add modals back - Login, Add Weight, Add Profile, Profile Detail, etc. */}
-      {/* For now, just the core layout is working */}
+      {/* LOGIN MODAL */}
+      {showLogin && (
+        <Modal onClose={() => setShowLogin(false)} title="Admin Login">
+          <form onSubmit={handleLogin} className="space-y-4">
+            <FormField
+              label="Password"
+              type="password"
+              value={adminPassword}
+              onChange={(value) => setAdminPassword(value)}
+              placeholder="Enter admin password"
+              icon={<Lock size={20} />}
+            />
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLogin(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn-primary flex-1">
+                Login
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* ADD WEIGHT MODAL */}
+      {showAddWeight && (
+        <Modal onClose={() => setShowAddWeight(false)} title="Add Weight Entry">
+          <form onSubmit={handleAddWeight} className="space-y-4">
+            <div>
+              <label className="block text-slate-300 text-sm mb-2">Participant</label>
+              <select
+                value={newWeight.profile_id}
+                onChange={(e) => setNewWeight({...newWeight, profile_id: e.target.value})}
+                className={`form-input ${formErrors.profile_id ? 'border-red-400' : ''}`}
+              >
+                <option value="">Select participant...</option>
+                {profiles.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {formErrors.profile_id && (
+                <p className="text-red-400 text-sm mt-1">{formErrors.profile_id}</p>
+              )}
+            </div>
+            
+            <FormField
+              label="Current Weight (kg)"
+              type="number"
+              value={newWeight.weight}
+              onChange={(value) => setNewWeight({...newWeight, weight: value})}
+              placeholder="e.g., 75.5"
+              step="0.1"
+              error={formErrors.weight}
+            />
+            
+            <FormField
+              label="Date (optional)"
+              type="date"
+              value={newWeight.date}
+              onChange={(value) => setNewWeight({...newWeight, date: value})}
+              error={formErrors.date}
+            />
+            
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAddWeight(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                disabled={submitting}
+                className="btn-primary flex-1"
+              >
+                {submitting ? 'Adding...' : 'Add Weight'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* ADD PROFILE MODAL */}
+      {showAddProfile && (
+        <Modal onClose={() => setShowAddProfile(false)} title="Add New Participant">
+          <form onSubmit={handleAddProfile} className="space-y-4">
+            <FormField
+              label="Full Name"
+              type="text"
+              value={newProfile.name}
+              onChange={(value) => setNewProfile({...newProfile, name: value})}
+              placeholder="Enter full name"
+              error={formErrors.name}
+            />
+            
+            <FormField
+              label="Starting Weight (kg)"
+              type="number"
+              value={newProfile.baseline}
+              onChange={(value) => setNewProfile({...newProfile, baseline: value})}
+              placeholder="e.g., 80"
+              step="0.1"
+              error={formErrors.baseline}
+            />
+            
+            <FormField
+              label="Goal Weight (kg)"
+              type="number"
+              value={newProfile.goal}
+              onChange={(value) => setNewProfile({...newProfile, goal: value})}
+              placeholder="e.g., 70"
+              step="0.1"
+              error={formErrors.goal}
+            />
+            
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAddProfile(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                disabled={submitting}
+                className="btn-primary flex-1"
+              >
+                {submitting ? 'Creating...' : 'Create Profile'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* PROFILE DETAIL MODAL */}
+      {showProfileDetail && selectedProfile && (
+        <Modal 
+          onClose={() => setShowProfileDetail(false)} 
+          title={selectedProfile.name}
+          className="max-w-2xl"
+        >
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-800 p-4 rounded-lg">
+                <p className="text-slate-400 text-sm">Current Weight</p>
+                <p className="text-2xl font-bold">
+                  {selectedProfile.current_weight ? `${selectedProfile.current_weight}kg` : 'Not recorded'}
+                </p>
+              </div>
+              <div className="bg-slate-800 p-4 rounded-lg">
+                <p className="text-slate-400 text-sm">Progress</p>
+                <p className="text-2xl font-bold">
+                  {selectedProfile.percentage_lost ? `${selectedProfile.percentage_lost}%` : '0%'}
+                </p>
+              </div>
+            </div>
+            
+            <div>
+              <h3 className="text-lg font-bold mb-3">Weight History</h3>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {profileHistory.length === 0 ? (
+                  <p className="text-slate-400">No weight entries yet</p>
+                ) : (
+                  profileHistory.map(weight => (
+                    <div key={weight.id} className="flex justify-between items-center bg-slate-800 p-3 rounded">
+                      <div>
+                        <p className="font-medium">{weight.current_weight}kg</p>
+                        <p className="text-sm text-slate-400">
+                          {new Date(weight.recorded_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => openEditWeight(weight)}
+                            className="p-2 text-blue-400 hover:bg-blue-400/20 rounded"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                          <button
+                            onClick={() => openDeleteWeight(weight)}
+                            className="p-2 text-red-400 hover:bg-red-400/20 rounded"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            
+            {isAdmin && (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => openEditProfile(selectedProfile)}
+                  className="btn-secondary flex-1"
+                >
+                  <Edit2 size={16} className="mr-2" />
+                  Edit Profile
+                </button>
+                <button
+                  onClick={() => openDeleteProfile(selectedProfile)}
+                  className="btn-danger flex-1"
+                >
+                  <Trash2 size={16} className="mr-2" />
+                  Delete Profile
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* EDIT PROFILE MODAL */}
+      {showEditProfile && selectedProfile && (
+        <Modal onClose={() => setShowEditProfile(false)} title="Edit Profile">
+          <form onSubmit={handleEditProfile} className="space-y-4">
+            <FormField
+              label="Full Name"
+              type="text"
+              value={editProfile.name}
+              onChange={(value) => setEditProfile({...editProfile, name: value})}
+              error={formErrors.name}
+            />
+            
+            <FormField
+              label="Starting Weight (kg)"
+              type="number"
+              value={editProfile.baseline}
+              onChange={(value) => setEditProfile({...editProfile, baseline: value})}
+              step="0.1"
+              error={formErrors.baseline}
+            />
+            
+            <FormField
+              label="Goal Weight (kg)"
+              type="number"
+              value={editProfile.goal}
+              onChange={(value) => setEditProfile({...editProfile, goal: value})}
+              step="0.1"
+              error={formErrors.goal}
+            />
+            
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowEditProfile(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                disabled={submitting}
+                className="btn-primary flex-1"
+              >
+                {submitting ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* EDIT WEIGHT MODAL */}
+      {showEditWeight && (
+        <Modal onClose={() => setShowEditWeight(false)} title="Edit Weight Entry">
+          <form onSubmit={handleEditWeight} className="space-y-4">
+            <FormField
+              label="Weight (kg)"
+              type="number"
+              value={editWeight.weight}
+              onChange={(value) => setEditWeight({...editWeight, weight: value})}
+              step="0.1"
+              error={formErrors.weight}
+            />
+            
+            <FormField
+              label="Date"
+              type="date"
+              value={editWeight.date}
+              onChange={(value) => setEditWeight({...editWeight, date: value})}
+              error={formErrors.date}
+            />
+            
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowEditWeight(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit" 
+                disabled={submitting}
+                className="btn-primary flex-1"
+              >
+                {submitting ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* CONFIRM DELETE MODAL */}
+      {showConfirmDialog && deleteTarget && (
+        <Modal onClose={() => setShowConfirmDialog(false)} title="Confirm Delete">
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+              <AlertTriangle className="text-red-400" size={24} />
+              <p className="text-red-200">
+                Are you sure you want to delete <strong>{deleteTarget.name}</strong>?
+                {deleteTarget.type === 'profile' && (
+                  <span className="block text-sm text-red-300 mt-1">
+                    This will also delete all weight entries for this person.
+                  </span>
+                )}
+              </p>
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowConfirmDialog(false)}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="btn-danger flex-1"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* WEEKLY SUMMARY MODAL */}
+      {showWeeklySummary && (
+        <Modal onClose={() => setShowWeeklySummary(false)} title="Weekly Summary">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-slate-800 p-4 rounded-lg">
+                <p className="text-slate-400 text-sm">Total Participants</p>
+                <p className="text-2xl font-bold">{profiles.length}</p>
+              </div>
+              <div className="bg-slate-800 p-4 rounded-lg">
+                <p className="text-slate-400 text-sm">Active This Week</p>
+                <p className="text-2xl font-bold">
+                  {profiles.filter(p => p.last_weigh_in && 
+                    new Date(p.last_weigh_in).getTime() > Date.now() - 7 * 24 * 60 * 60 * 1000
+                  ).length}
+                </p>
+              </div>
+            </div>
+            
+            <div>
+              <h3 className="text-lg font-bold mb-3">Top Performers This Period</h3>
+              <div className="space-y-2">
+                {profiles
+                  .filter(p => p.weight_lost && p.weight_lost > 0)
+                  .sort((a, b) => (b.weight_lost || 0) - (a.weight_lost || 0))
+                  .slice(0, 5)
+                  .map((profile, index) => (
+                    <div key={profile.id} className="flex justify-between items-center bg-slate-800 p-3 rounded">
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">
+                          {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '🏅'}
+                        </span>
+                        <span className="font-medium">{profile.name}</span>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-green-400">-{profile.weight_lost?.toFixed(1)}kg</p>
+                        <p className="text-sm text-slate-400">{profile.percentage_lost}% to goal</p>
+                      </div>
+                    </div>
+                  ))
+                }
+                {profiles.filter(p => p.weight_lost && p.weight_lost > 0).length === 0 && (
+                  <p className="text-slate-400 text-center py-4">No weight loss recorded yet. Keep going! 💪</p>
+                )}
+              </div>
+            </div>
+            
+            <div className="border-t border-slate-600 pt-4">
+              <button 
+                onClick={() => setShowWeeklySummary(false)}
+                className="btn-primary w-full"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ACHIEVEMENTS MODAL */}
+      {showAchievements && (
+        <Modal onClose={() => setShowAchievements(false)} title="Achievements">
+          <div className="space-y-4">
+            {achievements.map(achievement => {
+              const unlockedBy = profiles.filter(profile => {
+                return achievement.criteria(profile, profileHistory);
+              });
+              
+              return (
+                <div 
+                  key={achievement.id} 
+                  className={`p-4 rounded-lg border ${
+                    unlockedBy.length > 0 
+                      ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200'
+                      : 'bg-slate-800 border-slate-600 text-slate-400'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{achievement.icon}</span>
+                    <div className="flex-1">
+                      <h3 className="font-bold">{achievement.title}</h3>
+                      <p className="text-sm opacity-80">{achievement.description}</p>
+                      {unlockedBy.length > 0 && (
+                        <p className="text-xs mt-1">
+                          Unlocked by: {unlockedBy.map(p => p.name).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                    {unlockedBy.length > 0 && (
+                      <CheckCircle className="text-yellow-400" size={20} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
