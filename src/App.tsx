@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './lib/supabase';
-import { dataService } from './lib/dataService';
-import { Trophy, Lock, Share2, Plus, LogOut, TrendingDown, Users, X, Edit2, Trash2, Award, Calendar, Download, AlertTriangle, CheckCircle, AlertCircle, Wifi, WifiOff, Upload, HardDrive } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { Trophy, Lock, Share2, Plus, LogOut, TrendingDown, Users, X, Edit2, Trash2, Award, Calendar, Download, AlertTriangle, CheckCircle, AlertCircle, FolderOpen, Settings } from 'lucide-react';
 import type { LeaderboardEntry, Weight, Notification, Achievement, FormErrors, ValidationResult } from './types';
 
 const ADMIN_PASSWORD = 'weighttracker2026';
@@ -136,10 +136,14 @@ function App() {
   const [editWeight, setEditWeight] = useState({ weight: '', date: '' });
   const [confirmAction, setConfirmAction] = useState<{ type: 'delete-profile' | 'delete-weight'; title: string; message: string; action: () => void } | null>(null);
   
-  // New state for offline/local mode
-  const [isOnline, setIsOnline] = useState(true);
-  const [showOfflineOptions, setShowOfflineOptions] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Auto-save Excel settings
+  const [backupPath, setBackupPath] = useState(() => {
+    return localStorage.getItem('weighin_backup_path') || '';
+  });
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(() => {
+    return localStorage.getItem('weighin_auto_backup') === 'true';
+  });
+  const [showBackupSettings, setShowBackupSettings] = useState(false);
 
   const addNotification = useCallback((type: Notification['type'], message: string, duration = 5000) => {
     const notification: Notification = {
@@ -180,26 +184,14 @@ function App() {
     endOfDay.setHours(23, 59, 59, 999);
 
     try {
-      if (dataService.isOnline) {
-        const { data } = await supabase
-          .from('weights')
-          .select('id')
-          .eq('profile_id', profileId)
-          .gte('recorded_at', startOfDay.toISOString())
-          .lte('recorded_at', endOfDay.toISOString());
+      const { data } = await supabase
+        .from('weights')
+        .select('id')
+        .eq('profile_id', profileId)
+        .gte('recorded_at', startOfDay.toISOString())
+        .lte('recorded_at', endOfDay.toISOString());
 
-        return (data?.length || 0) > 0;
-      } else {
-        // Check local storage
-        const allWeights = JSON.parse(localStorage.getItem('weighin_weights_backup') || '[]');
-        const duplicates = allWeights.filter((w: any) => {
-          const recordedDate = new Date(w.recorded_at);
-          return w.profile_id === profileId && 
-                 recordedDate >= startOfDay && 
-                 recordedDate <= endOfDay;
-        });
-        return duplicates.length > 0;
-      }
+      return (data?.length || 0) > 0;
     } catch {
       return false; // If check fails, allow the entry
     }
@@ -233,59 +225,125 @@ function App() {
     addNotification('success', 'Data exported successfully!');
   }, [profiles, addNotification]);
 
-  // New offline functions
-  const exportToExcel = useCallback(() => {
-    dataService.exportData();
-    addNotification('success', '📊 Excel file downloaded successfully!');
-  }, [addNotification]);
+  // New auto-backup functions
+  const saveBackupPath = (path: string) => {
+    setBackupPath(path);
+    localStorage.setItem('weighin_backup_path', path);
+  };
 
-  const handleImportExcel = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const toggleAutoBackup = (enabled: boolean) => {
+    setAutoBackupEnabled(enabled);
+    localStorage.setItem('weighin_auto_backup', enabled.toString());
+  };
 
-    if (!file.name.toLowerCase().endsWith('.xlsx')) {
-      addNotification('error', 'Please select a valid Excel (.xlsx) file');
-      return;
-    }
-
+  const createExcelBackup = async () => {
     try {
-      await dataService.importData(file);
-      await fetchData();
-      addNotification('success', '📥 Data imported successfully from Excel!');
-      setShowOfflineOptions(false);
-    } catch (error) {
-      console.error('Import error:', error);
-      addNotification('error', 'Failed to import Excel file. Please check the format.');
-    } finally {
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
-  }, [addNotification]);
+      // Get all data
+      const { data: leaderboardData } = await supabase.from('leaderboard').select('*');
+      const { data: weightsData } = await supabase.from('weights').select('*');
+      
+      // Create workbook
+      const workbook = XLSX.utils.book_new();
 
-  const toggleOfflineMode = useCallback(() => {
-    const newMode = !isOnline;
-    dataService.switchMode(!newMode); // Switch to local if going offline
-    setIsOnline(newMode);
-    
-    if (!newMode) {
-      addNotification('info', '🔌 Switched to offline mode. Data will be saved locally.');
-    } else {
-      addNotification('success', '☁️ Switched to online mode. Connecting to Supabase...');
-      fetchData(); // Refresh data when going online
+      // Profiles sheet (from leaderboard data)
+      if (leaderboardData) {
+        const profilesWS = XLSX.utils.json_to_sheet(leaderboardData.map(p => ({
+          ID: p.id,
+          Name: p.name,
+          'Baseline Weight (kg)': p.baseline_weight,
+          'Goal Weight (kg)': p.goal_weight,
+          'Current Weight (kg)': p.current_weight,
+          'Weight Lost (kg)': p.total_lost,
+          'Progress %': p.percentage_to_goal,
+          'Last Weigh-in': new Date(p.last_recorded).toLocaleDateString(),
+          'Created At': new Date(p.created_at).toLocaleDateString()
+        })));
+        XLSX.utils.book_append_sheet(workbook, profilesWS, 'Current Standings');
+      }
+
+      // Weight History sheet
+      if (weightsData && weightsData.length > 0) {
+        const weightsWS = XLSX.utils.json_to_sheet(weightsData.map(w => ({
+          'Profile Name': leaderboardData?.find(p => p.id === w.profile_id)?.name || 'Unknown',
+          'Weight (kg)': w.current_weight,
+          'Recorded Date': new Date(w.recorded_at).toLocaleDateString(),
+          'Recorded Time': new Date(w.recorded_at).toLocaleTimeString(),
+          'Profile ID': w.profile_id
+        })).sort((a, b) => new Date(b['Recorded Date']).getTime() - new Date(a['Recorded Date']).getTime()));
+        XLSX.utils.book_append_sheet(workbook, weightsWS, 'Weight History');
+      }
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
+      const filename = `WeighIn-Wednesday-${timestamp}.xlsx`;
+      
+      return { workbook, filename };
+    } catch (error) {
+      console.error('Error creating backup:', error);
+      throw error;
     }
-  }, [isOnline, addNotification]);
+  };
+
+  const downloadExcelBackup = async () => {
+    try {
+      const { workbook, filename } = await createExcelBackup();
+      
+      // Convert to blob and download
+      const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addNotification('success', `📊 Excel backup downloaded: ${filename}`);
+    } catch (error) {
+      addNotification('error', 'Failed to create Excel backup');
+    }
+  };
+
+  const autoSaveBackup = async () => {
+    if (!autoBackupEnabled || !backupPath.trim()) return;
+    
+    try {
+      const { workbook, filename } = await createExcelBackup();
+      
+      // In a real browser environment, we can't directly save to file system
+      // So we'll save to Downloads and show instructions to move it
+      const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addNotification('info', `💾 Auto-backup saved to Downloads. Move to: ${backupPath}`, 8000);
+    } catch (error) {
+      console.error('Auto-backup failed:', error);
+    }
+  };
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const data = await dataService.fetchLeaderboard();
+      const { data, error } = await supabase.from('leaderboard').select('*');
+      if (error) throw error;
       setProfiles(data || []);
-      setIsOnline(dataService.isOnline);
       
-      if (!dataService.isOnline) {
-        addNotification('info', '🔌 Working offline with local data', 3000);
+      // Auto-backup after data loads (if enabled)
+      if (autoBackupEnabled) {
+        setTimeout(autoSaveBackup, 2000); // Delay to avoid blocking UI
       }
     } catch (error) {
       console.error('Error:', error);
@@ -307,21 +365,6 @@ function App() {
       subscription.unsubscribe();
     };
   }, []);
-
-  // Close offline options when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (showOfflineOptions) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.offline-options-container')) {
-          setShowOfflineOptions(false);
-        }
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showOfflineOptions]);
 
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -355,11 +398,15 @@ function App() {
         return;
       }
 
-      await dataService.addWeight(
-        newWeight.profile_id, 
-        parseWeight(newWeight.weight), 
-        dateToUse
-      );
+      const { error } = await supabase
+        .from('weights')
+        .insert([{
+          profile_id: newWeight.profile_id,
+          current_weight: parseWeight(newWeight.weight),
+          recorded_at: dateToUse
+        }]);
+
+      if (error) throw error;
       
       const profile = profiles.find(p => p.id === newWeight.profile_id);
       addNotification('success', `Weight logged for ${profile?.name}!`);
@@ -410,11 +457,15 @@ function App() {
         return;
       }
 
-      await dataService.addProfile(
-        newProfile.name.trim(),
-        parseWeight(newProfile.baseline),
-        parseWeight(newProfile.goal)
-      );
+      const { error } = await supabase
+        .from('profiles')
+        .insert([{
+          name: newProfile.name.trim(),
+          baseline_weight: parseWeight(newProfile.baseline),
+          goal_weight: parseWeight(newProfile.goal)
+        }]);
+
+      if (error) throw error;
       
       addNotification('success', `Profile created for ${newProfile.name}!`);
       setShowAddProfile(false);
@@ -458,11 +509,14 @@ function App() {
         return;
       }
 
-      const { error } = await dataService.updateProfile(selectedProfile.id, {
-        name: editProfile.name.trim(),
-        baseline_weight: parseWeight(editProfile.baseline),
-        goal_weight: parseWeight(editProfile.goal)
-      });
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          name: editProfile.name.trim(),
+          baseline_weight: parseWeight(editProfile.baseline),
+          goal_weight: parseWeight(editProfile.goal)
+        })
+        .eq('id', selectedProfile.id);
 
       if (error) throw error;
       
@@ -496,10 +550,13 @@ function App() {
         return;
       }
 
-      const { error } = await dataService.updateWeight(selectedWeight.id, {
-        current_weight: parseWeight(editWeight.weight),
-        recorded_at: new Date(editWeight.date).toISOString()
-      });
+      const { error } = await supabase
+        .from('weights')
+        .update({
+          current_weight: parseWeight(editWeight.weight),
+          recorded_at: new Date(editWeight.date).toISOString()
+        })
+        .eq('id', selectedWeight.id);
 
       if (error) throw error;
       
@@ -520,7 +577,10 @@ function App() {
     if (!selectedProfile) return;
     
     try {
-      const { error } = await dataService.deleteProfile(selectedProfile.id);
+      const { error } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', selectedProfile.id);
 
       if (error) throw error;
       
@@ -537,7 +597,10 @@ function App() {
     if (!selectedWeight) return;
     
     try {
-      const { error } = await dataService.deleteWeight(selectedWeight.id);
+      const { error } = await supabase
+        .from('weights')
+        .delete()
+        .eq('id', selectedWeight.id);
 
       if (error) throw error;
       
@@ -577,42 +640,21 @@ function App() {
 
   const fetchProfileHistory = async (profileId: string): Promise<Weight[]> => {
     try {
-      let history: Weight[] = [];
-      
-      if (dataService.isOnline) {
-        const { data, error } = await supabase
-          .from('weights')
-          .select('*')
-          .eq('profile_id', profileId)
-          .order('recorded_at', { ascending: false });
+      const { data, error } = await supabase
+        .from('weights')
+        .select('*')
+        .eq('profile_id', profileId)
+        .order('recorded_at', { ascending: false });
 
-        if (error) throw error;
-        history = data || [];
-      } else {
-        // Use local storage
-        const allWeights = JSON.parse(localStorage.getItem('weighin_weights_backup') || '[]');
-        history = allWeights
-          .filter((w: any) => w.profile_id === profileId)
-          .sort((a: any, b: any) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
-      }
+      if (error) throw error;
       
+      const history = data || [];
       setProfileHistory(history);
       return history;
     } catch (error) {
       console.error('Error fetching history:', error);
-      
-      // Fallback to local storage
-      try {
-        const allWeights = JSON.parse(localStorage.getItem('weighin_weights_backup') || '[]');
-        const history = allWeights
-          .filter((w: any) => w.profile_id === profileId)
-          .sort((a: any, b: any) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
-        setProfileHistory(history);
-        return history;
-      } catch {
-        addNotification('error', 'Failed to load weight history');
-        return [];
-      }
+      addNotification('error', 'Failed to load weight history');
+      return [];
     }
   };
 
@@ -745,88 +787,69 @@ function App() {
           </h1>
           <p className="text-slate-400 text-sm mt-1 flex items-center gap-2">
             <Users size={14} /> {profiles.length} participants tracking
-            {/* Online/Offline Status */}
-            <span className="mx-2">•</span>
-            {isOnline ? (
-              <span className="flex items-center gap-1 text-emerald-400">
-                <Wifi size={12} />
-                Online
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-amber-400">
-                <WifiOff size={12} />
-                Offline
-              </span>
-            )}
           </p>
         </div>
         <div className="flex gap-2">
-          {/* Offline Mode Toggle & Options */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowOfflineOptions(!showOfflineOptions)}
-              className={`p-3 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg ${
-                isOnline ? 'bg-slate-700' : 'bg-amber-600'
-              }`}
-              title="Offline options"
-            >
-              <HardDrive size={16} />
-            </button>
-            
-            {showOfflineOptions && (
-              <div className="offline-options-container absolute top-16 right-0 bg-slate-800 border border-slate-600 rounded-xl p-4 shadow-2xl z-50 min-w-64">
-                <div className="space-y-3">
-                  <h3 className="text-white font-bold flex items-center gap-2">
-                    <HardDrive size={16} />
-                    Offline Options
-                  </h3>
-                  
-                  <button
-                    onClick={toggleOfflineMode}
-                    className={`w-full p-3 rounded-lg font-medium transition-all ${
-                      isOnline 
-                        ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                    }`}
-                  >
-                    {isOnline ? '🔌 Switch to Offline' : '☁️ Switch to Online'}
-                  </button>
-                  
-                  <div className="border-t border-slate-600 pt-3">
-                    <button
-                      onClick={exportToExcel}
-                      className="w-full p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
-                    >
-                      <Download size={16} />
-                      Export to Excel
-                    </button>
-                    
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".xlsx"
-                      onChange={handleImportExcel}
-                      className="hidden"
-                    />
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="w-full mt-2 p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
-                    >
-                      <Upload size={16} />
-                      Import from Excel
-                    </button>
-                  </div>
-                  
-                  <div className="text-xs text-slate-400 border-t border-slate-600 pt-2">
-                    💡 Offline mode saves data locally. Export to Excel for backup!
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          
           {isAdmin && (
             <>
+              <button
+                onClick={() => setShowBackupSettings(!showBackupSettings)}
+                className="p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg"
+                title="Backup Settings"
+              >
+                <Settings size={16} />
+              </button>
+
+              {showBackupSettings && (
+                <div className="absolute top-16 right-0 bg-slate-800 border border-slate-600 rounded-xl p-4 shadow-2xl z-50 min-w-80">
+                  <div className="space-y-4">
+                    <h3 className="text-white font-bold flex items-center gap-2">
+                      <FolderOpen size={16} />
+                      Auto-Backup Settings
+                    </h3>
+                    
+                    <div>
+                      <label className="block text-slate-300 text-sm mb-2">
+                        Backup Folder Path:
+                      </label>
+                      <input
+                        type="text"
+                        value={backupPath}
+                        onChange={(e) => saveBackupPath(e.target.value)}
+                        placeholder="e.g., C:\Documents\WeighInWedData"
+                        className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm"
+                      />
+                      <p className="text-slate-400 text-xs mt-1">
+                        💡 Files will download to your Downloads folder. Move them here manually.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="autoBackup"
+                        checked={autoBackupEnabled}
+                        onChange={(e) => toggleAutoBackup(e.target.checked)}
+                        className="w-4 h-4"
+                      />
+                      <label htmlFor="autoBackup" className="text-slate-300 text-sm">
+                        Auto-backup after data changes
+                      </label>
+                    </div>
+
+                    <div className="border-t border-slate-600 pt-3">
+                      <button
+                        onClick={downloadExcelBackup}
+                        className="w-full p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
+                      >
+                        <Download size={16} />
+                        Download Excel Backup Now
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <button
                 onClick={exportData}
                 className="p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg"
