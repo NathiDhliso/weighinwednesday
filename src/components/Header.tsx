@@ -9,9 +9,10 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ profiles, children }) => {
   return (
-    <header className="container-main">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 sm:gap-0 mb-6 sm:mb-8 pt-4">
-        <div>
+    <header className="container-main pt-4 sm:pt-6">
+      <div className="flex flex-col gap-3 sm:gap-4 mb-4 sm:mb-6">
+        {/* Title Section */}
+        <div className="min-w-0">
           <h1 className="text-heading-1 bg-clip-text text-transparent gradient-primary">
             Weigh-in Wednesday
           </h1>
@@ -19,7 +20,9 @@ const Header: React.FC<HeaderProps> = ({ profiles, children }) => {
             <Users size={14} /> {profiles.length} participants tracking
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 sm:gap-3">
+        
+        {/* Action Buttons - Mobile Optimized */}
+        <div className="flex flex-wrap gap-2 relative">
           {children}
         </div>
       </div>

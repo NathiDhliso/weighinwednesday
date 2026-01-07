@@ -638,6 +638,7 @@ function App() {
 
   const handleEditProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (!selectedProfile) return;
     
     setSubmitting(true);
@@ -691,6 +692,7 @@ function App() {
 
   const handleEditWeight = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (!selectedWeightId) return;
     
     setSubmitting(true);
@@ -847,22 +849,23 @@ function App() {
           <>
             <button
               onClick={() => setShowBackupSettings(!showBackupSettings)}
-              className="p-2 sm:p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg"
+              className="p-2 sm:p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 active:scale-95 transition-transform shadow-lg"
               title="Backup Settings"
             >
-              <Settings size={16} />
+              <Settings size={16} className="sm:hidden" />
+              <Settings size={20} className="hidden sm:block" />
             </button>
 
             {showBackupSettings && (
-              <div className="absolute top-12 sm:top-16 right-0 bg-slate-800 border border-slate-600 rounded-xl p-3 sm:p-4 shadow-2xl z-50 w-80 max-w-[calc(100vw-2rem)] sm:min-w-80">
+              <div className="absolute top-full left-0 right-0 sm:left-auto sm:right-0 mt-2 bg-slate-800 border border-slate-600 rounded-xl p-3 sm:p-4 shadow-2xl z-50 w-full sm:w-80 max-w-[calc(100vw-1.5rem)]">
                 <div className="space-y-3 sm:space-y-4">
-                  <h3 className="text-white font-bold flex items-center gap-2">
+                  <h3 className="text-white font-bold flex items-center gap-2 text-sm sm:text-base">
                     <FolderOpen size={16} />
                     Auto-Backup Settings
                   </h3>
                   
                   <div>
-                    <label className="block text-slate-300 text-sm mb-2">
+                    <label className="block text-slate-300 text-xs sm:text-sm mb-2">
                       Backup Folder Path:
                     </label>
                     <input
@@ -870,10 +873,10 @@ function App() {
                       value={backupPath}
                       onChange={(e) => saveBackupPath(e.target.value)}
                       placeholder="e.g., C:\Documents\WeighInWedData"
-                      className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm"
+                      className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white text-xs sm:text-sm"
                     />
                     <p className="text-slate-400 text-xs mt-1">
-                      💡 Files will download to your Downloads folder. Move them here manually.
+                      💡 Files download to Downloads folder.
                     </p>
                   </div>
 
@@ -885,7 +888,7 @@ function App() {
                       onChange={(e) => toggleAutoBackup(e.target.checked)}
                       className="w-4 h-4"
                     />
-                    <label htmlFor="autoBackup" className="text-slate-300 text-sm">
+                    <label htmlFor="autoBackup" className="text-slate-300 text-xs sm:text-sm">
                       Auto-backup after data changes
                     </label>
                   </div>
@@ -893,10 +896,10 @@ function App() {
                   <div className="border-t border-slate-600 pt-3">
                     <button 
                       onClick={downloadExcelBackup}
-                      className="w-full p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium flex items-center justify-center gap-2 transition-colors"
+                      className="w-full p-2 sm:p-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-lg font-medium flex items-center justify-center gap-2 transition-colors text-sm"
                     >
                       <Download size={16} />
-                      Download Excel Backup Now
+                      Download Excel Backup
                     </button>
                   </div>
                 </div>
@@ -905,17 +908,19 @@ function App() {
 
             <button 
               onClick={exportData}
-              className="p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" 
+              className="p-2 sm:p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 active:scale-95 transition-transform shadow-lg" 
               title="Export Data"
             >
-              <Download size={20} />
+              <Download size={16} className="sm:hidden" />
+              <Download size={20} className="hidden sm:block" />
             </button>
             <button 
               onClick={() => setShowWeeklySummary(true)}
-              className="p-3 bg-purple-600 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" 
+              className="p-2 sm:p-3 bg-purple-600 rounded-full backdrop-blur-md hover:scale-110 active:scale-95 transition-transform shadow-lg" 
               title="Weekly Summary"
             >
-              <Calendar size={20} />
+              <Calendar size={16} className="sm:hidden" />
+              <Calendar size={20} className="hidden sm:block" />
             </button>
           </>
         )}
@@ -924,20 +929,22 @@ function App() {
             e.stopPropagation();
             setShowAchievements(true);
           }}
-          className="p-3 bg-yellow-600 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg"
+          className="p-2 sm:p-3 bg-yellow-600 rounded-full backdrop-blur-md hover:scale-110 active:scale-95 transition-transform shadow-lg"
           title="Achievements"
         >
-          <Award size={20} />
+          <Award size={16} className="sm:hidden" />
+          <Award size={20} className="hidden sm:block" />
         </button>
         <button
           onClick={(e) => {
             e.stopPropagation();
             shareStats();
           }}
-          className="p-3 bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg shadow-emerald-500/20"
+          className="p-2 sm:p-3 bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full backdrop-blur-md hover:scale-110 active:scale-95 transition-transform shadow-lg shadow-emerald-500/20"
           title="Share Stats"
         >
-          <Share2 size={20} />
+          <Share2 size={16} className="sm:hidden" />
+          <Share2 size={20} className="hidden sm:block" />
         </button>
       </Header>
 
@@ -1156,13 +1163,13 @@ function App() {
                       {isAdmin && (
                         <div className="flex gap-2">
                           <button
-                            onClick={() => openEditWeight(weight)}
+                            onClick={(e) => { e.stopPropagation(); openEditWeight(weight); }}
                             className="p-2 text-blue-400 hover:bg-blue-400/20 rounded"
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
-                            onClick={() => openDeleteWeight(weight)}
+                            onClick={(e) => { e.stopPropagation(); openDeleteWeight(weight); }}
                             className="p-2 text-red-400 hover:bg-red-400/20 rounded"
                           >
                             <Trash2 size={16} />

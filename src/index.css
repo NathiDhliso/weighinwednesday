@@ -145,4 +145,15 @@
   .progress-fill {
     @apply h-full bg-gradient-to-r from-blue-500 via-cyan-500 to-emerald-400 transition-all duration-1000 ease-out relative;
   }
+  
+  /* Header Action Buttons - Mobile First */
+  .btn-header {
+    @apply p-2 sm:p-3 rounded-full backdrop-blur-md hover:scale-110 active:scale-95 transition-transform shadow-lg;
+    min-height: 36px;
+    min-width: 36px;
+  }
+  
+  .btn-header-icon {
+    @apply w-4 h-4 sm:w-5 sm:h-5;
+  }
 }
