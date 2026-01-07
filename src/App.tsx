@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './lib/supabase';
-import { Trophy, Lock, Share2, Plus, LogOut, TrendingDown, Users, X, Edit2, Trash2, Award, Calendar, Download, AlertTriangle, CheckCircle, AlertCircle } from 'lucide-react';
+import { dataService } from './lib/dataService';
+import { Trophy, Lock, Share2, Plus, LogOut, TrendingDown, Users, X, Edit2, Trash2, Award, Calendar, Download, AlertTriangle, CheckCircle, AlertCircle, Wifi, WifiOff, Upload, HardDrive } from 'lucide-react';
 import type { LeaderboardEntry, Weight, Notification, Achievement, FormErrors, ValidationResult } from './types';
 
 const ADMIN_PASSWORD = 'weighttracker2026';
@@ -134,6 +135,11 @@ function App() {
   const [editProfile, setEditProfile] = useState({ name: '', baseline: '', goal: '' });
   const [editWeight, setEditWeight] = useState({ weight: '', date: '' });
   const [confirmAction, setConfirmAction] = useState<{ type: 'delete-profile' | 'delete-weight'; title: string; message: string; action: () => void } | null>(null);
+  
+  // New state for offline/local mode
+  const [isOnline, setIsOnline] = useState(true);
+  const [showOfflineOptions, setShowOfflineOptions] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addNotification = useCallback((type: Notification['type'], message: string, duration = 5000) => {
     const notification: Notification = {
@@ -173,14 +179,30 @@ function App() {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const { data } = await supabase
-      .from('weights')
-      .select('id')
-      .eq('profile_id', profileId)
-      .gte('recorded_at', startOfDay.toISOString())
-      .lte('recorded_at', endOfDay.toISOString());
+    try {
+      if (dataService.isOnline) {
+        const { data } = await supabase
+          .from('weights')
+          .select('id')
+          .eq('profile_id', profileId)
+          .gte('recorded_at', startOfDay.toISOString())
+          .lte('recorded_at', endOfDay.toISOString());
 
-    return (data?.length || 0) > 0;
+        return (data?.length || 0) > 0;
+      } else {
+        // Check local storage
+        const allWeights = JSON.parse(localStorage.getItem('weighin_weights_backup') || '[]');
+        const duplicates = allWeights.filter((w: any) => {
+          const recordedDate = new Date(w.recorded_at);
+          return w.profile_id === profileId && 
+                 recordedDate >= startOfDay && 
+                 recordedDate <= endOfDay;
+        });
+        return duplicates.length > 0;
+      }
+    } catch {
+      return false; // If check fails, allow the entry
+    }
   }, []);
 
   const exportData = useCallback(() => {
@@ -211,12 +233,60 @@ function App() {
     addNotification('success', 'Data exported successfully!');
   }, [profiles, addNotification]);
 
+  // New offline functions
+  const exportToExcel = useCallback(() => {
+    dataService.exportData();
+    addNotification('success', '📊 Excel file downloaded successfully!');
+  }, [addNotification]);
+
+  const handleImportExcel = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      addNotification('error', 'Please select a valid Excel (.xlsx) file');
+      return;
+    }
+
+    try {
+      await dataService.importData(file);
+      await fetchData();
+      addNotification('success', '📥 Data imported successfully from Excel!');
+      setShowOfflineOptions(false);
+    } catch (error) {
+      console.error('Import error:', error);
+      addNotification('error', 'Failed to import Excel file. Please check the format.');
+    } finally {
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  }, [addNotification]);
+
+  const toggleOfflineMode = useCallback(() => {
+    const newMode = !isOnline;
+    dataService.switchMode(!newMode); // Switch to local if going offline
+    setIsOnline(newMode);
+    
+    if (!newMode) {
+      addNotification('info', '🔌 Switched to offline mode. Data will be saved locally.');
+    } else {
+      addNotification('success', '☁️ Switched to online mode. Connecting to Supabase...');
+      fetchData(); // Refresh data when going online
+    }
+  }, [isOnline, addNotification]);
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.from('leaderboard').select('*');
-      if (error) throw error;
+      const data = await dataService.fetchLeaderboard();
       setProfiles(data || []);
+      setIsOnline(dataService.isOnline);
+      
+      if (!dataService.isOnline) {
+        addNotification('info', '🔌 Working offline with local data', 3000);
+      }
     } catch (error) {
       console.error('Error:', error);
       addNotification('error', 'Failed to load data. Please try again.');
@@ -237,6 +307,21 @@ function App() {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Close offline options when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showOfflineOptions) {
+        const target = event.target as HTMLElement;
+        if (!target.closest('.offline-options-container')) {
+          setShowOfflineOptions(false);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showOfflineOptions]);
 
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -270,15 +355,11 @@ function App() {
         return;
       }
 
-      const { error } = await supabase
-        .from('weights')
-        .insert([{
-          profile_id: newWeight.profile_id,
-          current_weight: parseWeight(newWeight.weight),
-          recorded_at: dateToUse
-        }]);
-
-      if (error) throw error;
+      await dataService.addWeight(
+        newWeight.profile_id, 
+        parseWeight(newWeight.weight), 
+        dateToUse
+      );
       
       const profile = profiles.find(p => p.id === newWeight.profile_id);
       addNotification('success', `Weight logged for ${profile?.name}!`);
@@ -329,15 +410,11 @@ function App() {
         return;
       }
 
-      const { error } = await supabase
-        .from('profiles')
-        .insert([{
-          name: newProfile.name.trim(),
-          baseline_weight: parseWeight(newProfile.baseline),
-          goal_weight: parseWeight(newProfile.goal)
-        }]);
-
-      if (error) throw error;
+      await dataService.addProfile(
+        newProfile.name.trim(),
+        parseWeight(newProfile.baseline),
+        parseWeight(newProfile.goal)
+      );
       
       addNotification('success', `Profile created for ${newProfile.name}!`);
       setShowAddProfile(false);
@@ -381,14 +458,11 @@ function App() {
         return;
       }
 
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          name: editProfile.name.trim(),
-          baseline_weight: parseWeight(editProfile.baseline),
-          goal_weight: parseWeight(editProfile.goal)
-        })
-        .eq('id', selectedProfile.id);
+      const { error } = await dataService.updateProfile(selectedProfile.id, {
+        name: editProfile.name.trim(),
+        baseline_weight: parseWeight(editProfile.baseline),
+        goal_weight: parseWeight(editProfile.goal)
+      });
 
       if (error) throw error;
       
@@ -422,13 +496,10 @@ function App() {
         return;
       }
 
-      const { error } = await supabase
-        .from('weights')
-        .update({
-          current_weight: parseWeight(editWeight.weight),
-          recorded_at: new Date(editWeight.date).toISOString()
-        })
-        .eq('id', selectedWeight.id);
+      const { error } = await dataService.updateWeight(selectedWeight.id, {
+        current_weight: parseWeight(editWeight.weight),
+        recorded_at: new Date(editWeight.date).toISOString()
+      });
 
       if (error) throw error;
       
@@ -449,10 +520,7 @@ function App() {
     if (!selectedProfile) return;
     
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', selectedProfile.id);
+      const { error } = await dataService.deleteProfile(selectedProfile.id);
 
       if (error) throw error;
       
@@ -469,10 +537,7 @@ function App() {
     if (!selectedWeight) return;
     
     try {
-      const { error } = await supabase
-        .from('weights')
-        .delete()
-        .eq('id', selectedWeight.id);
+      const { error } = await dataService.deleteWeight(selectedWeight.id);
 
       if (error) throw error;
       
@@ -512,21 +577,42 @@ function App() {
 
   const fetchProfileHistory = async (profileId: string): Promise<Weight[]> => {
     try {
-      const { data, error } = await supabase
-        .from('weights')
-        .select('*')
-        .eq('profile_id', profileId)
-        .order('recorded_at', { ascending: false });
-
-      if (error) throw error;
+      let history: Weight[] = [];
       
-      const history = data || [];
+      if (dataService.isOnline) {
+        const { data, error } = await supabase
+          .from('weights')
+          .select('*')
+          .eq('profile_id', profileId)
+          .order('recorded_at', { ascending: false });
+
+        if (error) throw error;
+        history = data || [];
+      } else {
+        // Use local storage
+        const allWeights = JSON.parse(localStorage.getItem('weighin_weights_backup') || '[]');
+        history = allWeights
+          .filter((w: any) => w.profile_id === profileId)
+          .sort((a: any, b: any) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+      }
+      
       setProfileHistory(history);
       return history;
     } catch (error) {
       console.error('Error fetching history:', error);
-      addNotification('error', 'Failed to load weight history');
-      return [];
+      
+      // Fallback to local storage
+      try {
+        const allWeights = JSON.parse(localStorage.getItem('weighin_weights_backup') || '[]');
+        const history = allWeights
+          .filter((w: any) => w.profile_id === profileId)
+          .sort((a: any, b: any) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+        setProfileHistory(history);
+        return history;
+      } catch {
+        addNotification('error', 'Failed to load weight history');
+        return [];
+      }
     }
   };
 
@@ -659,9 +745,86 @@ function App() {
           </h1>
           <p className="text-slate-400 text-sm mt-1 flex items-center gap-2">
             <Users size={14} /> {profiles.length} participants tracking
+            {/* Online/Offline Status */}
+            <span className="mx-2">•</span>
+            {isOnline ? (
+              <span className="flex items-center gap-1 text-emerald-400">
+                <Wifi size={12} />
+                Online
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-amber-400">
+                <WifiOff size={12} />
+                Offline
+              </span>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
+          {/* Offline Mode Toggle & Options */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowOfflineOptions(!showOfflineOptions)}
+              className={`p-3 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg ${
+                isOnline ? 'bg-slate-700' : 'bg-amber-600'
+              }`}
+              title="Offline options"
+            >
+              <HardDrive size={16} />
+            </button>
+            
+            {showOfflineOptions && (
+              <div className="offline-options-container absolute top-16 right-0 bg-slate-800 border border-slate-600 rounded-xl p-4 shadow-2xl z-50 min-w-64">
+                <div className="space-y-3">
+                  <h3 className="text-white font-bold flex items-center gap-2">
+                    <HardDrive size={16} />
+                    Offline Options
+                  </h3>
+                  
+                  <button
+                    onClick={toggleOfflineMode}
+                    className={`w-full p-3 rounded-lg font-medium transition-all ${
+                      isOnline 
+                        ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    {isOnline ? '🔌 Switch to Offline' : '☁️ Switch to Online'}
+                  </button>
+                  
+                  <div className="border-t border-slate-600 pt-3">
+                    <button
+                      onClick={exportToExcel}
+                      className="w-full p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
+                    >
+                      <Download size={16} />
+                      Export to Excel
+                    </button>
+                    
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".xlsx"
+                      onChange={handleImportExcel}
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full mt-2 p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2"
+                    >
+                      <Upload size={16} />
+                      Import from Excel
+                    </button>
+                  </div>
+                  
+                  <div className="text-xs text-slate-400 border-t border-slate-600 pt-2">
+                    💡 Offline mode saves data locally. Export to Excel for backup!
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          
           {isAdmin && (
             <>
               <button
