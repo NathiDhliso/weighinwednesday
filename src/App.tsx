@@ -172,6 +172,221 @@ function App() {
     setNotifications(prev => prev.filter(n => n.id !== id));
   }, []);
 
+  // SILVER BULLET BACKUP SYSTEM - Bulletproof Excel Auto-Backup
+  const saveBackupPath = (path: string) => {
+    setBackupPath(path);
+    localStorage.setItem('weighin_backup_path', path);
+    addNotification('success', `💾 Backup path saved: ${path}`);
+  };
+
+  const toggleAutoBackup = (enabled: boolean) => {
+    setAutoBackupEnabled(enabled);
+    localStorage.setItem('weighin_auto_backup', enabled.toString());
+    addNotification('info', `🔄 Auto-backup ${enabled ? 'enabled' : 'disabled'}`);
+  };
+
+  const createExcelBackup = async (): Promise<{ workbook: any; filename: string }> => {
+    try {
+      addNotification('info', '📊 Creating Excel backup...', 3000);
+      
+      // Get comprehensive data from all sources
+      const [leaderboardResult, weightsResult, profilesResult] = await Promise.all([
+        supabase.from('leaderboard').select('*'),
+        supabase.from('weights').select('*'),
+        supabase.from('profiles').select('*')
+      ]);
+
+      if (leaderboardResult.error) throw leaderboardResult.error;
+      if (weightsResult.error) throw weightsResult.error;
+      if (profilesResult.error) throw profilesResult.error;
+
+      const leaderboardData = leaderboardResult.data || [];
+      const weightsData = weightsResult.data || [];
+      const profilesData = profilesResult.data || [];
+
+      // Create workbook with multiple sheets
+      const workbook = XLSX.utils.book_new();
+
+      // 1. CURRENT STANDINGS SHEET (Leaderboard)
+      if (leaderboardData.length > 0) {
+        const standingsWS = XLSX.utils.json_to_sheet(leaderboardData.map(p => ({
+          Rank: leaderboardData.indexOf(p) + 1,
+          Name: p.name,
+          'Current Weight (kg)': p.current_weight,
+          'Baseline Weight (kg)': p.baseline_weight,
+          'Goal Weight (kg)': p.goal_weight,
+          'Weight Lost (kg)': p.total_lost,
+          'Progress to Goal (%)': p.percentage_to_goal,
+          'Last Weigh-in': p.last_recorded ? new Date(p.last_recorded).toLocaleDateString() : 'Never',
+          'Days Since Start': Math.floor((Date.now() - new Date(p.created_at).getTime()) / (1000 * 60 * 60 * 24)),
+          'Profile Created': new Date(p.created_at).toLocaleDateString()
+        })));
+        XLSX.utils.book_append_sheet(workbook, standingsWS, 'Current Standings');
+      }
+
+      // 2. COMPLETE WEIGHT HISTORY SHEET
+      if (weightsData.length > 0) {
+        const historyWS = XLSX.utils.json_to_sheet(
+          weightsData
+            .map(w => {
+              const profile = profilesData.find(p => p.id === w.profile_id);
+              return {
+                'Entry ID': w.id,
+                'Profile Name': profile?.name || 'Unknown',
+                'Weight (kg)': w.current_weight,
+                'Recorded Date': new Date(w.recorded_at).toLocaleDateString(),
+                'Recorded Time': new Date(w.recorded_at).toLocaleTimeString(),
+                'Day of Week': new Date(w.recorded_at).toLocaleDateString('en-US', { weekday: 'long' }),
+                'Profile ID': w.profile_id,
+                'Baseline Weight': profile?.baseline_weight,
+                'Goal Weight': profile?.goal_weight
+              };
+            })
+            .sort((a, b) => new Date(b['Recorded Date']).getTime() - new Date(a['Recorded Date']).getTime())
+        );
+        XLSX.utils.book_append_sheet(workbook, historyWS, 'Weight History');
+      }
+
+      // 3. PROFILES MASTER DATA SHEET
+      if (profilesData.length > 0) {
+        const profilesWS = XLSX.utils.json_to_sheet(profilesData.map(p => ({
+          'Profile ID': p.id,
+          'Name': p.name,
+          'Baseline Weight (kg)': p.baseline_weight,
+          'Goal Weight (kg)': p.goal_weight,
+          'Target Loss (kg)': p.baseline_weight - p.goal_weight,
+          'Created Date': new Date(p.created_at).toLocaleDateString(),
+          'Total Entries': weightsData.filter(w => w.profile_id === p.id).length
+        })));
+        XLSX.utils.book_append_sheet(workbook, profilesWS, 'Profiles Master');
+      }
+
+      // 4. BACKUP METADATA SHEET
+      const metadataWS = XLSX.utils.json_to_sheet([{
+        'Backup Created': new Date().toLocaleString(),
+        'Total Participants': profilesData.length,
+        'Total Weight Entries': weightsData.length,
+        'Data Source': 'Supabase Database',
+        'App Version': '2.0 - Mobile First',
+        'Backup Type': 'Complete Data Export',
+        'Export Format': 'Excel XLSX',
+        'Next Suggested Backup': new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString()
+      }]);
+      XLSX.utils.book_append_sheet(workbook, metadataWS, 'Backup Info');
+
+      // Generate timestamped filename
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
+      const timeStr = new Date().toLocaleTimeString().replace(/[:.]/g, '-');
+      const filename = `WeighIn-Wednesday-COMPLETE-${timestamp}-${timeStr}.xlsx`;
+      
+      return { workbook, filename };
+    } catch (error) {
+      console.error('❌ Excel backup creation failed:', error);
+      throw new Error(`Backup creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const downloadExcelBackup = async () => {
+    try {
+      const { workbook, filename } = await createExcelBackup();
+      
+      // Convert to blob and trigger download
+      const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([excelBuffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      });
+      
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addNotification('success', `📊 Excel backup downloaded: ${filename}`, 8000);
+      
+      // Update last backup time in localStorage
+      localStorage.setItem('weighin_last_backup', new Date().toISOString());
+    } catch (error) {
+      console.error('❌ Download failed:', error);
+      addNotification('error', `Failed to download backup: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const autoSaveBackup = async () => {
+    if (!autoBackupEnabled) {
+      console.log('🚫 Auto-backup disabled, skipping...');
+      return;
+    }
+    
+    try {
+      const { workbook, filename } = await createExcelBackup();
+      
+      // Save to Downloads with browser API
+      const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([excelBuffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      });
+      
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      const backupMsg = backupPath.trim() 
+        ? `💾 Auto-backup saved to Downloads. Please move to: ${backupPath}` 
+        : `💾 Auto-backup saved to Downloads folder: ${filename}`;
+      
+      addNotification('info', backupMsg, 10000);
+      localStorage.setItem('weighin_last_auto_backup', new Date().toISOString());
+      
+    } catch (error) {
+      console.error('❌ Auto-backup failed:', error);
+      addNotification('error', `Auto-backup failed: ${error instanceof Error ? error.message : 'Check your connection'}`);
+    }
+  };
+
+  const exportData = useCallback(() => {
+    try {
+      const data = {
+        profiles: profiles.map(p => ({
+          name: p.name,
+          baseline_weight: p.baseline_weight,
+          goal_weight: p.goal_weight,
+          current_weight: p.current_weight,
+          weight_lost: p.weight_lost,
+          percentage_lost: p.percentage_lost,
+          last_weigh_in: p.last_weigh_in
+        })),
+        export_date: new Date().toISOString(),
+        total_participants: profiles.length,
+        backup_type: 'JSON Export'
+      };
+      
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `weigh-in-wednesday-json-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addNotification('success', '📁 JSON data exported successfully!');
+    } catch (error) {
+      addNotification('error', `Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [profiles, addNotification]);
+
   const shareStats = () => {
     const top3 = profiles.slice(0, 3).filter(p => p.percentage_lost);
     const biggestLoser = [...profiles]
@@ -227,6 +442,14 @@ function App() {
       const { data, error } = await supabase.from('leaderboard').select('*');
       if (error) throw error;
       setProfiles(data || []);
+      
+      // 🛡️ SILVER BULLET: Auto-backup after successful data load
+      if (autoBackupEnabled && (data || []).length > 0) {
+        // Delay auto-backup to not block UI
+        setTimeout(() => {
+          autoSaveBackup();
+        }, 3000);
+      }
     } catch (error) {
       console.error('Error:', error);
       addNotification('error', 'Failed to load data. Please try again.');
@@ -249,7 +472,7 @@ function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 text-white font-sans">
+    <div className="mobile-safe-height bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 text-white font-sans overflow-x-hidden">
       <NotificationStack 
         notifications={notifications}
         onRemoveNotification={removeNotification}
@@ -281,7 +504,7 @@ function App() {
                     <input
                       type="text"
                       value={backupPath}
-                      onChange={(e) => setBackupPath(e.target.value)}
+                      onChange={(e) => saveBackupPath(e.target.value)}
                       placeholder="e.g., C:\Documents\WeighInWedData"
                       className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white text-sm"
                     />
@@ -295,7 +518,7 @@ function App() {
                       type="checkbox"
                       id="autoBackup"
                       checked={autoBackupEnabled}
-                      onChange={(e) => setAutoBackupEnabled(e.target.checked)}
+                      onChange={(e) => toggleAutoBackup(e.target.checked)}
                       className="w-4 h-4"
                     />
                     <label htmlFor="autoBackup" className="text-slate-300 text-sm">
@@ -304,7 +527,10 @@ function App() {
                   </div>
 
                   <div className="border-t border-slate-600 pt-3">
-                    <button className="w-full p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium flex items-center justify-center gap-2">
+                    <button 
+                      onClick={downloadExcelBackup}
+                      className="w-full p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium flex items-center justify-center gap-2 transition-colors"
+                    >
                       <Download size={16} />
                       Download Excel Backup Now
                     </button>
@@ -313,7 +539,11 @@ function App() {
               </div>
             )}
 
-            <button className="p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" title="Export Data">
+            <button 
+              onClick={exportData}
+              className="p-3 bg-slate-700 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" 
+              title="Export Data"
+            >
               <Download size={20} />
             </button>
             <button className="p-3 bg-purple-600 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg" title="Weekly Summary">
@@ -337,13 +567,13 @@ function App() {
         </button>
       </Header>
 
-      <main className="container-main space-y-3 sm:space-y-4 mb-24 sm:mb-32">
+      <main className="container-main space-y-3 sm:space-y-4 pb-20 sm:pb-24 md:pb-32">
         {loading ? (
-          <div className="text-center py-12 sm:py-20 text-slate-400">Loading...</div>
+          <div className="text-center py-12 sm:py-16 md:py-20 text-slate-400">Loading...</div>
         ) : profiles.length === 0 ? (
-          <div className="text-center py-12 sm:py-20">
-            <Trophy size={64} className="mx-auto mb-4 opacity-20" />
-            <p className="text-slate-400">No participants yet. Add profiles to get started!</p>
+          <div className="text-center py-12 sm:py-16 md:py-20">
+            <Trophy size={48} className="sm:w-16 sm:h-16 mx-auto mb-4 opacity-20" />
+            <p className="text-slate-400 text-sm sm:text-base">No participants yet. Add profiles to get started!</p>
             {isAdmin && (
               <button
                 onClick={() => setShowAddProfile(true)}

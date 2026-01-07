@@ -2,35 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Mobile-first design system for Weigh-in Wednesday */
+/* BULLETPROOF Mobile-First Design System */
 @layer base {
-  body {
-    @apply antialiased;
+  /* Fix mobile viewport and eliminate white spaces */
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
   }
   
-  /* Smooth scrolling for mobile */
   html {
+    height: 100%;
+    min-height: 100%;
     scroll-behavior: smooth;
     -webkit-text-size-adjust: 100%;
+    /* Prevent zoom on input focus in iOS */
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
-}
-
+  
+  body {
+    height: 100%;
+    min-height: 100vh;
+    min-height: 100dvh; /* Modern viewport units */
+    @apply antialiased;
+    /* Ensure body takes full height */
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+  
+  #root {
+    height: 100%;
+    min-height: 100vh;
+    min-height: 100dvh; /* Dynamic viewport height for mobile */
+  }}
 @layer components {
-  /* Button Components - Mobile First */
+  /* Mobile-Optimized Button Components */
   .btn-primary {
-    @apply bg-gradient-to-r from-blue-600 to-cyan-600 hover:scale-105 transition-all px-4 py-3 sm:px-6 sm:py-3 rounded-lg sm:rounded-xl font-bold text-sm sm:text-base;
+    @apply bg-gradient-to-r from-blue-600 to-cyan-600 hover:scale-105 active:scale-95 transition-all px-4 py-3 sm:px-6 sm:py-3 rounded-lg sm:rounded-xl font-bold text-sm sm:text-base;
+    /* Ensure minimum touch target of 44px */
+    min-height: 44px;
+    min-width: 44px;
   }
   
   .btn-secondary {
-    @apply bg-white/5 hover:bg-white/10 py-3 sm:py-4 rounded-lg sm:rounded-xl transition-all font-medium text-sm sm:text-base;
+    @apply bg-white/5 hover:bg-white/10 active:bg-white/15 py-3 sm:py-4 rounded-lg sm:rounded-xl transition-all font-medium text-sm sm:text-base;
+    min-height: 44px;
   }
   
   .btn-danger {
-    @apply bg-red-600 hover:bg-red-500 py-3 sm:py-4 rounded-lg sm:rounded-xl font-bold transition-all text-sm sm:text-base;
+    @apply bg-red-600 hover:bg-red-500 active:bg-red-700 py-3 sm:py-4 rounded-lg sm:rounded-xl font-bold transition-all text-sm sm:text-base;
+    min-height: 44px;
   }
   
   .btn-success {
-    @apply bg-emerald-600 hover:bg-emerald-500 py-3 sm:py-4 rounded-lg sm:rounded-xl font-bold transition-all text-sm sm:text-base;
+    @apply bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 py-3 sm:py-4 rounded-lg sm:rounded-xl font-bold transition-all text-sm sm:text-base;
+    min-height: 44px;
   }
   
   /* Form Components - Mobile First */
@@ -46,22 +74,37 @@
     @apply border-emerald-500 focus:ring-emerald-500;
   }
   
-  /* Card Components - Mobile First */
+  /* Card Components - Mobile Optimized */
   .card-leaderboard {
-    @apply relative overflow-hidden p-4 sm:p-6 rounded-xl sm:rounded-2xl border backdrop-blur-xl transition-all hover:scale-[1.01] sm:hover:scale-[1.02] cursor-pointer;
+    @apply relative overflow-hidden p-3 sm:p-4 md:p-6 rounded-lg sm:rounded-xl md:rounded-2xl border backdrop-blur-xl transition-all active:scale-[0.98] sm:hover:scale-[1.01] md:hover:scale-[1.02] cursor-pointer;
+    /* Ensure cards don't break mobile layout */
+    width: 100%;
+    max-width: 100%;
   }
   
   .card-modal {
-    @apply bg-slate-900 border border-white/20 p-6 sm:p-8 rounded-2xl sm:rounded-3xl w-full shadow-2xl;
+    @apply bg-slate-900 border border-white/20 p-4 sm:p-6 md:p-8 rounded-xl sm:rounded-2xl md:rounded-3xl w-full shadow-2xl;
+    max-height: 90vh;
+    overflow-y: auto;
   }
   
-  /* Layout Components - Mobile First */
+  /* Layout Components - Mobile Safe */
   .modal-backdrop {
     @apply fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-50;
+    /* Ensure full coverage on mobile */
+    height: 100vh;
+    height: 100dvh;
   }
   
   .container-main {
-    @apply w-full max-w-4xl mx-auto px-4 sm:px-6;
+    @apply w-full max-w-4xl mx-auto px-3 sm:px-4 md:px-6;
+  }
+  
+  .mobile-safe-height {
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Fallback for older browsers */
+    min-height: calc(100vh - env(safe-area-inset-bottom));
   }
   
   /* Text Styles - Mobile First */
