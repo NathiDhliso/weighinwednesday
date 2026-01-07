@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './lib/supabase';
-import { Trophy, Lock, Share2, Plus, LogOut, TrendingDown, Users, X, Edit2, Trash2, Award, Target, Calendar, Download, AlertTriangle, CheckCircle, AlertCircle } from 'lucide-react';
+import { Trophy, Lock, Share2, Plus, LogOut, TrendingDown, Users, X, Edit2, Trash2, Award, Calendar, Download, AlertTriangle, CheckCircle, AlertCircle } from 'lucide-react';
 import type { LeaderboardEntry, Weight, Notification, Achievement, FormErrors, ValidationResult } from './types';
 
 const ADMIN_PASSWORD = 'weighttracker2026';
