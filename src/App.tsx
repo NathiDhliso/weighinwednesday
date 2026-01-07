@@ -1178,14 +1178,14 @@ function App() {
             {isAdmin && (
               <div className="flex gap-3">
                 <button
-                  onClick={() => openEditProfile(selectedProfile)}
+                  onClick={(e) => { e.stopPropagation(); openEditProfile(selectedProfile); }}
                   className="btn-secondary flex-1"
                 >
                   <Edit2 size={16} className="mr-2" />
                   Edit Profile
                 </button>
                 <button
-                  onClick={() => openDeleteProfile(selectedProfile)}
+                  onClick={(e) => { e.stopPropagation(); openDeleteProfile(selectedProfile); }}
                   className="btn-danger flex-1"
                 >
                   <Trash2 size={16} className="mr-2" />
@@ -1306,13 +1306,13 @@ function App() {
             
             <div className="flex gap-3">
               <button
-                onClick={() => setShowConfirmDialog(false)}
+                onClick={(e) => { e.stopPropagation(); setShowConfirmDialog(false); }}
                 className="btn-secondary flex-1"
               >
                 Cancel
               </button>
               <button
-                onClick={confirmDelete}
+                onClick={(e) => { e.stopPropagation(); confirmDelete(); }}
                 className="btn-danger flex-1"
               >
                 Delete
