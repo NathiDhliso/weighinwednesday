@@ -513,6 +513,7 @@ function App() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (passwordInput === ADMIN_PASSWORD) {
       setIsAdmin(true);
       setShowLogin(false);
@@ -525,6 +526,7 @@ function App() {
 
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setSubmitting(true);
     setFormErrors({});
     
@@ -585,6 +587,7 @@ function App() {
 
   const handleAddProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setSubmitting(true);
     setFormErrors({});
     
@@ -917,14 +920,20 @@ function App() {
           </>
         )}
         <button
-          onClick={() => setShowAchievements(true)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowAchievements(true);
+          }}
           className="p-3 bg-yellow-600 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg"
           title="Achievements"
         >
           <Award size={20} />
         </button>
         <button
-          onClick={shareStats}
+          onClick={(e) => {
+            e.stopPropagation();
+            shareStats();
+          }}
           className="p-3 bg-gradient-to-r from-emerald-500 to-blue-500 rounded-full backdrop-blur-md hover:scale-110 transition-transform shadow-lg shadow-emerald-500/20"
           title="Share Stats"
         >

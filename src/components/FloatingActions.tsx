@@ -19,7 +19,10 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({
       {isAdmin && (
         <div className="fixed bottom-20 sm:bottom-24 right-4 sm:right-6 flex flex-col gap-2 sm:gap-3">
           <button
-            onClick={onAddWeight}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddWeight();
+            }}
             className="p-3 sm:p-4 bg-blue-600 rounded-full shadow-lg hover:bg-blue-500 transition backdrop-blur-md"
             title="Add Weight"
             aria-label="Add new weight entry"
@@ -28,7 +31,10 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({
             <Plus size={24} className="hidden sm:block" />
           </button>
           <button
-            onClick={onAddProfile}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddProfile();
+            }}
             className="p-3 sm:p-4 bg-cyan-600 rounded-full shadow-lg hover:bg-cyan-500 transition backdrop-blur-md"
             title="Add Profile"
             aria-label="Add new profile"
@@ -40,7 +46,10 @@ const FloatingActions: React.FC<FloatingActionsProps> = ({
       )}
 
       <button
-        onClick={onAdminToggle}
+        onClick={(e) => {
+          e.stopPropagation();
+          onAdminToggle();
+        }}
         className={`fixed bottom-4 sm:bottom-6 right-4 sm:right-6 p-3 sm:p-4 rounded-full shadow-lg transition backdrop-blur-md ${
           isAdmin ? 'bg-red-600 hover:bg-red-500' : 'bg-slate-700 hover:bg-slate-600'
         }`}
