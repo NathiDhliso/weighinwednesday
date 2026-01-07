@@ -513,10 +513,10 @@ function App() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (adminPassword === ADMIN_PASSWORD) {
+    if (passwordInput === ADMIN_PASSWORD) {
       setIsAdmin(true);
       setShowLogin(false);
-      setAdminPassword('');
+      setPasswordInput('');
       addNotification('success', 'Admin access granted!');
     } else {
       addNotification('error', 'Incorrect password');
@@ -974,8 +974,8 @@ function App() {
             <FormField
               label="Password"
               type="password"
-              value={adminPassword}
-              onChange={(value) => setAdminPassword(value)}
+              value={passwordInput}
+              onChange={(value) => setPasswordInput(value)}
               placeholder="Enter admin password"
               icon={<Lock size={20} />}
             />
